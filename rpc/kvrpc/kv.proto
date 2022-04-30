@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+option go_package="./;kvproto";
+
+// package kvproto;
+
+service KV {
+    rpc PutAppend (PutAppendArgs) returns (PutAppendReply) {}
+    rpc Get (GetArgs) returns (GetReply){};
+	rpc PutAppendInCausal (PutAppendInCausalArgs) returns (PutAppendInCausalReply) {};
+	rpc GetInCausal (GetInCausalArgs) returns (GetInCausalReply) {};
+    // rpc Delete (DeleteArgs) returns (DeleteReply){};
+}
+
+message PutAppendArgs  {
+	string Key = 1;  
+	string Value = 2; 
+	string Op = 3;
+	int64 Id = 4;
+	int64 Seq  =5;
+}
+
+message PutAppendReply  {
+    bool IsLeader = 1;
+    bool Success = 2;
+}
+
+message PutAppendInCausalArgs  {
+	string Key = 1;  
+	string Value = 2; 
+	string Op = 3;
+	int64 Id = 4;
+	int64 Seq  =5;
+	map<string,int32> VectorClock =6;
+}
+
+
+message PutAppendInCausalReply  {
+    bool Success = 1;
+	map<string,int32> VectorClock = 2;
+}
+
+
+message GetArgs  {
+	string Key = 1;
+}
+
+message GetReply  {
+	string Value = 1;
+    bool IsLeader = 2;
+}
+
+message GetInCausalArgs {
+	string Key = 1;
+	map<string,int32> VectorClock = 2;
+}
+
+message GetInCausalReply {
+	bool Success = 1;
+	string Value = 2;
+}
+
+// message DeleteArgs {
+//     string Key = 1;
+// }
+
+// message DeleteReply {
+//     bool IsLeader = 1;
+//     bool Success = 2;
+// }

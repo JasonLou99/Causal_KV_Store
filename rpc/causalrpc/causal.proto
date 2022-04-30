@@ -1,0 +1,16 @@
+syntax = "proto3";
+ 
+option go_package="./;causalproto";
+
+service CAUSAL {
+    rpc AppendEntriesInCausal (AppendEntriesInCausalArgs) returns (AppendEntriesInCausalReply){};
+}
+ 
+message AppendEntriesInCausalArgs {
+    bytes      Log = 1;  
+    map<string, int32> VectorClock = 2;
+}
+
+message AppendEntriesInCausalReply{           
+    bool Success = 1;       
+}
