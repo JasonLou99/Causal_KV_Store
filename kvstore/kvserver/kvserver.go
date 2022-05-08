@@ -177,7 +177,7 @@ func main() {
 	kvserver.delay = 0
 	// kvserver.gossip = gsp.MakeGossip(address)
 	// kvserver.raft = raft.MakeRaft(address, members, persister, &sync.Mutex{}, kvserver.applyCh, kvserver.delay)
-	kvserver.causalEntity = causal.MakeCausalEntity(address, members, persister, &sync.Mutex{}, kvserver.applyCh, kvserver.delay)
+	kvserver.causalEntity = causal.MakeCausalEntity(address, members, persister, &sync.RWMutex{}, kvserver.applyCh, kvserver.delay)
 	// server运行20min
 	time.Sleep(time.Second * 1200)
 }

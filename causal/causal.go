@@ -20,14 +20,13 @@ import (
 )
 
 type CausalEntity struct {
-	vectorClock map[string]int32
+	vectorClock sync.Map
 	members     []string
 	delay       int
 	address     string
 	persister   *Per.Persister
 	// client      RPC.CAUSALClient
 	// me          int32
-	mu   *sync.Mutex
 	rwmu *sync.RWMutex
 
 	// waitCh  chan config.OpCausalVector
@@ -39,44 +38,69 @@ type Log struct {
 	Command config.Op
 }
 
-func (ce *CausalEntity) MergeVC(vc map[string]int32) {
-	for member := range vc {
-		if vc[member] > ce.vectorClock[member] {
-			ce.vectorClock[member] = vc[member]
+func (ce *CausalEntity) MergeVC(vc sync.Map) {
+	vc.Range(func(k, v interface{}) bool {
+		val, ok := ce.vectorClock.Load(k)
+		if !ok {
+			ce.vectorClock.Store(k, v)
+		} else {
+			if v.(int32) > val.(int32) {
+				ce.vectorClock.Store(k, v)
+			}
 		}
-	}
+		return true
+	})
+	// for member := range vc {
+	// 	if vc[member] > ce.vectorClock[member] {
+	// 		ce.vectorClock[member] = vc[member]
+	// 	}
+	// }
 }
 
-func (ce *CausalEntity) IsUpper(vc map[string]int32) bool {
-	// ce.mu.Lock()
-	// defer ce.mu.Unlock()
-	util.DPrintf("IsUpper(): ce.vc: %v, arg_vc: %v", ce.vectorClock, vc)
-	if len(vc) == 0 {
+func (ce *CausalEntity) IsUpper(vc sync.Map) bool {
+	util.DPrintf("IsUpper(): ce.vc: %v, arg_vc: %v", util.BecomeMap(ce.vectorClock), util.BecomeMap(vc))
+	if util.Len(vc) == 0 {
 		return true
 	}
-	if len(ce.vectorClock) != len(vc) {
+	if util.Len(ce.vectorClock) != util.Len(vc) {
 		return false
 	} else {
-		vc_temp := ce.vectorClock
-		for member := range vc_temp {
-			// key在vc中存在
-			if _, ok := vc[member]; ok {
-				if vc_temp[member] >= vc[member] {
-					continue
+		// vc_temp := ce.vectorClock
+		// for member := range vc_temp {
+		// 	// key在vc中存在
+		// 	if _, ok := vc[member]; ok {
+		// 		if vc_temp[member] >= vc[member] {
+		// 			continue
+		// 		} else {
+		// 			return false
+		// 		}
+		// 	}
+		// 	return false
+		// }
+		// return true
+		res := true
+		ce.vectorClock.Range(func(key, value interface{}) bool {
+			v, ok := vc.Load(key)
+			if ok {
+				if value.(int32) >= v.(int32) {
+					return true
 				} else {
+					res = false
 					return false
 				}
 			}
+			res = false
 			return false
-		}
-		return true
+		})
+		return res
 	}
 }
 
 // this method must be called by KV Server instead of CausalEntity
-func (ce *CausalEntity) Start(command interface{}, vcFromClient map[string]int32) (map[string]int32, bool) {
-	ce.mu.Lock()
-	defer ce.mu.Unlock()
+func (ce *CausalEntity) Start(command interface{}, vcFromClientArg map[string]int32) (map[string]int32, bool) {
+	// ce.mu.Lock()
+	// defer ce.mu.Unlock()
+	vcFromClient := util.BecomeSyncMap(vcFromClientArg)
 	newLog := Log{
 		command.(config.Op),
 	}
@@ -85,11 +109,13 @@ func (ce *CausalEntity) Start(command interface{}, vcFromClient map[string]int32
 	if newLog.Command.Option == "Put" {
 		isUpper := ce.IsUpper(vcFromClient)
 		if isUpper {
-			ce.vectorClock[ce.address+"1"] += 1
+			// ce.vectorClock[ce.address+"1"] += 1
+			val, _ := ce.vectorClock.Load(ce.address + "1")
+			ce.vectorClock.Store(ce.address+"1", val.(int32)+1)
 			data, _ := json.Marshal(newLog)
 			args := &RPC.AppendEntriesInCausalArgs{
 				Log:         data,
-				VectorClock: ce.vectorClock,
+				VectorClock: util.BecomeMap(ce.vectorClock),
 			}
 			for i := 0; i < len(ce.members); i++ {
 				if ce.members[i] != ce.address {
@@ -100,12 +126,12 @@ func (ce *CausalEntity) Start(command interface{}, vcFromClient map[string]int32
 			ce.persister.Put(newLog.Command.Key, newLog.Command.Value)
 			ce.applyCh <- 1
 			util.DPrintf("applyCh unread buffer: %v", len(ce.applyCh))
-			return ce.vectorClock, true
+			return util.BecomeMap(ce.vectorClock), true
 		} else {
 			return nil, false
 		}
 	} else if newLog.Command.Option == "Get" {
-		if len(vcFromClient) == 0 {
+		if util.Len(vcFromClient) == 0 {
 			return nil, true
 		} else {
 			if ce.IsUpper(vcFromClient) {
@@ -143,12 +169,12 @@ func (ce *CausalEntity) sendAppendEntriesInCausal(address string, args *RPC.Appe
 }
 
 func (ce *CausalEntity) AppendEntriesInCausal(ctx context.Context, args *RPC.AppendEntriesInCausalArgs) (reply *RPC.AppendEntriesInCausalReply, err error) {
-	fmt.Println("==============AppendEntriesInCausal RPC Call From Others==============")
 	// ce.mu.Lock()
 	// defer ce.mu.Unlock()
+	fmt.Println("==============AppendEntriesInCausal RPC Call From Others==============")
 	util.DPrintf("AppendEntriesInCausalArgs: %v", args)
 	reply = &RPC.AppendEntriesInCausalReply{}
-	remoteVC := args.VectorClock
+	remoteVC := util.BecomeSyncMap(args.VectorClock)
 	ok := ce.IsUpper(remoteVC)
 	if ok {
 		// 本地vc更大，忽略请求
@@ -187,7 +213,7 @@ func (ce *CausalEntity) RegisterServer(address string) {
 
 }
 
-func MakeCausalEntity(add string, mem []string, persist *Per.Persister, mu *sync.Mutex, applyCh chan int, delay int) *CausalEntity {
+func MakeCausalEntity(add string, mem []string, persist *Per.Persister, mu *sync.RWMutex, applyCh chan int, delay int) *CausalEntity {
 	ce := &CausalEntity{}
 	// if len(mem) <= 1 {
 	// 	panic("#######Address is less 1, you should set follower's address!######")
@@ -196,33 +222,31 @@ func MakeCausalEntity(add string, mem []string, persist *Per.Persister, mu *sync
 	ce.persister = persist
 	ce.applyCh = applyCh
 	ce.delay = delay
-	ce.mu = mu
+	ce.rwmu = mu
 	// for concurrent map write and read
-	ce.rwmu = &sync.RWMutex{}
 	ce.members = make([]string, len(mem))
-	ce.vectorClock = make(map[string]int32)
+	// ce.vectorClock = make(sync.Map)
 	// ce.waitCh = make(chan config.Op, 100)
 	for i := 0; i < len(mem); i++ {
 		ce.members[i] = mem[i]
 		// 因为client记录的是30011端口，而非3001端口，统一记录
 		add_temp := mem[i] + "1"
-		ce.vectorClock[add_temp] = 0
+		ce.vectorClock.Store(add_temp, int32(0))
 	}
 	fmt.Println("members: ", ce.members)
-	fmt.Println("vectorClock: ", ce.vectorClock)
+	fmt.Println("vectorClock: ", util.BecomeMap(ce.vectorClock))
 	go ce.RegisterServer(ce.address)
 	// 省略了后台的心跳检测
 	// 通过Start()
 	return ce
 }
 
-func MakeTestVC(vectorClock map[string]int32) *CausalEntity {
+func MakeTestVC(vectorClock sync.Map) *CausalEntity {
 	ce := &CausalEntity{}
-	ce.mu = &sync.Mutex{}
 	ce.vectorClock = vectorClock
 	return ce
 }
 
 func (ce *CausalEntity) PrintVC() {
-	fmt.Println(ce.vectorClock)
+	fmt.Println(util.BecomeMap(ce.vectorClock))
 }
