@@ -212,6 +212,8 @@ func (ck *Clerk) GetValueInCausal(address string, args *kvproto.GetInCausalArgs)
 }
 
 var count int32 = 0
+var putCount int32 = 0
+var getCount int32 = 0
 
 func ReadRequest(num int, servers []string) {
 	ck := Clerk{
@@ -252,16 +254,63 @@ func Request(cnum int, num int, servers []string) {
 		value := rand.Intn(100000)
 		// 写操作
 		ck.Put((serverId+1)%len(ck.servers), "key"+strconv.Itoa(key), "value"+strconv.Itoa(value))
+		atomic.AddInt32(&putCount, 1)
+		atomic.AddInt32(&count, 1)
 		// 读操作
 		k := "key" + strconv.Itoa(key)
 		v := ck.Get((serverId+1)%len(ck.servers), k)
+		atomic.AddInt32(&getCount, 1)
+		atomic.AddInt32(&count, 1)
 		if v != "" {
 			// 查询出了值就输出，屏蔽请求非Leader的情况
 			// util.DPrintf("TestCount: ", count, ",Get ", k, ": ", ck.Get(k))
-			util.DPrintf("TestCount: %v ,Get %v: %v, VectorClock: %v", count, k, v, ck.vectorClock)
+			util.DPrintf("TestCount: %v ,Get %v: %v, VectorClock: %v, getCount: %v, putCount: %v", count, k, v, ck.vectorClock, getCount, putCount)
 			util.DPrintf("spent: %v", time.Since(start_time))
 		}
+
+		if int(count) == num*cnum {
+			util.DPrintf("Task is completed, spent: %v", time.Since(start_time))
+		}
+		serverId++
+	}
+}
+
+func RequestRation(cnum int, num int, servers []string, getRation int) {
+	fmt.Println("servers: ", servers)
+	ck := Clerk{
+		servers:     make([]string, len(servers)),
+		vectorClock: make(map[string]int32),
+	}
+	ck.consistencyLevel = CAUSAL
+	for _, server := range servers {
+		ck.vectorClock[server] = 0
+	}
+	copy(ck.servers, servers)
+	start_time := time.Now()
+	serverId := 0
+	for i := 0; i < num; i++ {
+		rand.Seed(time.Now().UnixNano())
+		key := rand.Intn(100000)
+		value := rand.Intn(100000)
+		// 写操作
+		ck.Put((serverId+1)%len(ck.servers), "key"+strconv.Itoa(key), "value"+strconv.Itoa(value))
+		atomic.AddInt32(&putCount, 1)
 		atomic.AddInt32(&count, 1)
+
+		for j := 0; j < getRation; j++ {
+			// 读操作
+			k := "key" + strconv.Itoa(key)
+			v := ck.Get((serverId+1)%len(ck.servers), k)
+			atomic.AddInt32(&getCount, 1)
+			atomic.AddInt32(&count, 1)
+			if v != "" {
+				// 查询出了值就输出，屏蔽请求非Leader的情况
+				// util.DPrintf("TestCount: ", count, ",Get ", k, ": ", ck.Get(k))
+				util.DPrintf("TestCount: %v ,Get %v: %v, VectorClock: %v, getCount: %v, putCount: %v", count, k, v, ck.vectorClock, getCount, putCount)
+				util.DPrintf("spent: %v", time.Since(start_time))
+			}
+		}
+
 		if int(count) == num*cnum {
 			util.DPrintf("Task is completed, spent: %v", time.Since(start_time))
 		}
@@ -274,11 +323,13 @@ func main() {
 	var mode = flag.String("mode", "read", "Read or Put and so on")
 	var cnums = flag.String("cnums", "1", "Client Threads Number")
 	var onums = flag.String("onums", "1", "Client Requests times")
+	var getration = flag.String("getration", "1", "Get Times per Put Times")
 	// 将命令行参数解析
 	flag.Parse()
 	servers := strings.Split(*ser, ",")
 	clientNumm, _ := strconv.Atoi(*cnums)
 	optionNumm, _ := strconv.Atoi(*onums)
+	getRation, _ := strconv.Atoi(*getration)
 
 	if clientNumm == 0 {
 		fmt.Println("### Don't forget input -cnum's value ! ###")
@@ -290,12 +341,11 @@ func main() {
 	}
 
 	// 总请求次数Times = clientNumm * optionNumm
-	if *mode == "Read" {
+	if *mode == "RequestRation" {
 		for i := 0; i < clientNumm; i++ {
-			go ReadRequest(optionNumm, servers)
+			go RequestRation(clientNumm, optionNumm, servers, getRation)
 		}
-	}
-	if *mode == "Request" {
+	} else if *mode == "Request" {
 		for i := 0; i < clientNumm; i++ {
 			go Request(clientNumm, optionNumm, servers)
 		}
